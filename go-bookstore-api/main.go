@@ -21,11 +21,25 @@ func main() {
 		{ID: "2", Title: "Go in Action", Author: "William Kennedy"},
 	}
 
-	http.HandleFunc("/books", getBooksHandler)
-	http.HandleFunc("/book", createBookHandler)
+	http.HandleFunc("/books", enableCORS(getBooksHandler))
+	http.HandleFunc("/book", enableCORS(createBookHandler))
+	http.HandleFunc("/book/", enableCORS(deleteBookHandler))
 
 	fmt.Println("Server is running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func enableCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}
 }
 
 func getBooksHandler(w http.ResponseWriter, r *http.Request) {
@@ -49,4 +63,24 @@ func createBookHandler(w http.ResponseWriter, r *http.Request) {
 	books = append(books, book)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(book)
+}
+
+func deleteBookHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Path[len("/book/"):]
+
+	for i, book := range books {
+		if book.ID == id {
+			books = append(books[:i], books[i+1:]...)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "Book with ID %s has been deleted", id)
+			return
+		}
+	}
+
+	http.Error(w, "Book not found", http.StatusNotFound)
 }
