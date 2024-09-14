@@ -6,7 +6,7 @@ const API_URL = "http://localhost:8080";
 
 function App() {
   const [books, setBooks] = useState([]);
-  const [newBook, setNewBook] = useState({ id: "", title: "", author: "" });
+  const [newBook, setNewBook] = useState({ title: "", author: "" });
 
   useEffect(() => {
     fetchBooks();
@@ -28,9 +28,9 @@ function App() {
   const addBook = async (e) => {
     e.preventDefault();
     try {
-      await axios.post(`${API_URL}/book`, newBook);
-      setNewBook({ id: "", title: "", author: "" });
-      fetchBooks();
+      const response = await axios.post(`${API_URL}/book`, newBook);
+      setBooks([...books, response.data]);
+      setNewBook({ title: "", author: "" });
     } catch (error) {
       console.error("Error adding book:", error);
     }
@@ -39,7 +39,7 @@ function App() {
   const deleteBook = async (id) => {
     try {
       await axios.delete(`${API_URL}/book/${id}`);
-      fetchBooks();
+      setBooks(books.filter(book => book.id !== id));
     } catch (error) {
       console.error("Error deleting book:", error);
     }
@@ -63,14 +63,6 @@ function App() {
       </div>
       <form onSubmit={addBook} className="add-book-form">
         <h2>Add New Book</h2>
-        <input
-          type="text"
-          name="id"
-          value={newBook.id}
-          onChange={handleInputChange}
-          placeholder="Book ID"
-          required
-        />
         <input
           type="text"
           name="title"

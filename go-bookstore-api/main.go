@@ -1,25 +1,49 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Book struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Author string `json:"author"`
+	ID     primitive.ObjectID `json:"id"`
+	Title  string             `json:"title"`
+	Author string             `json:"author"`
 }
 
-var books []Book
+var booksCollection *mongo.Collection
 
 func main() {
-	books = []Book{
-		{ID: "1", Title: "The Go Programming Language", Author: "Alan A. A. Donovan"},
-		{ID: "2", Title: "Go in Action", Author: "William Kennedy"},
+	// Set up MongoDB connection
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer func() {
+		if err = client.Disconnect(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Ping the database
+	err = client.Ping(ctx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Connected to MongoDB!")
+
+	booksCollection = client.Database("bookstore").Collection("books")
 
 	http.HandleFunc("/books", enableCORS(getBooksHandler))
 	http.HandleFunc("/book", enableCORS(createBookHandler))
@@ -43,6 +67,22 @@ func enableCORS(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func getBooksHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := booksCollection.Find(ctx, bson.M{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var books []Book
+	if err = cursor.All(ctx, &books); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(books)
 }
@@ -60,7 +100,27 @@ func createBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	books = append(books, book)
+	// Generate a new ObjectID if one isn't provided
+	if book.ID.IsZero() {
+		book.ID = primitive.NewObjectID()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := booksCollection.InsertOne(ctx, book)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	insertedID, ok := result.InsertedID.(primitive.ObjectID)
+	if !ok {
+		http.Error(w, "Failed to get inserted ID", http.StatusInternalServerError)
+		return
+	}
+	book.ID = insertedID
+
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(book)
 }
@@ -72,15 +132,26 @@ func deleteBookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.URL.Path[len("/book/"):]
-
-	for i, book := range books {
-		if book.ID == id {
-			books = append(books[:i], books[i+1:]...)
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, "Book with ID %s has been deleted", id)
-			return
-		}
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
 	}
 
-	http.Error(w, "Book not found", http.StatusNotFound)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := booksCollection.DeleteOne(ctx, bson.M{"_id": objectID})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if result.DeletedCount == 0 {
+		http.Error(w, "Book not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Book with ID %s has been deleted", id)
 }
